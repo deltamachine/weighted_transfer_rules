@@ -227,20 +227,43 @@ class FST:
         # each state from state_list is the state of FST
         # at the end of corresponding coverage from coverage_list
         coverage_list, state_list = [[]], [self.start_state]
+        #print(line)
 
         # go through all tokens in line
         for token, cat_list in line:
-            cat_list = sorted(cat_list, reverse=True)
-            print(token, cat_list)
+            cat_list = sorted(cat_list)
             new_coverage_list, new_state_list = [], []
 
             if cat_list == []:
-                continue
+                if coverage_list == [[]]:
+                    coverage_list, state_list = [[('w', token), ('r', 'default')]], [self.start_state]
+                    continue
+                else:
+                    for coverage, state in zip(coverage_list, state_list):
+                        if state in self.final_states:
+                            # current state is one of the final states: close previous pattern
+                            new_coverage = coverage + [('r', self.final_states[state])]
+                            new_coverage_list.append(new_coverage + [('w', token), ('r', 'default')])
+                            new_state_list.append(self.start_state)
+                        else:
+                            try:
+                                if coverage[-1][-2] == 'w':
+                                    new_coverage_list.append(coverage + [('r', 'default'), ('w', token)])
+                                else:
+                                    new_coverage_list.append(coverage + [('w', token)])
+
+                                try:
+                                    new_state_list.append(self.transitions[(self.start_state, cat)])
+                                except:
+                                    new_state_list.append(self.start_state)
+                            except:
+                                continue
             else:
                 # go through all cats for the token
                 for cat in cat_list:
                     # try to continue each coverage obtained on the previous step
                     for coverage, state in zip(coverage_list, state_list):
+                        #print(coverage)
                         # first, check if we can go further along current pattern
                         if (state, cat) in self.transitions:
                             # current pattern can be made longer: add one more token
@@ -260,6 +283,9 @@ class FST:
                                 # can not start new pattern because of an unknown word
                                 new_coverage_list.append(new_coverage + [('w', token), ('r', 'unknown')])
                                 new_state_list.append(self.start_state)
+                            else:
+                                new_coverage_list.append(new_coverage + [('w', token)])
+                                new_state_list.append(self.start_state)
 
 
                         # if not, check if it is just an unknown word
@@ -272,23 +298,22 @@ class FST:
                         # if nothing worked, just discard this coverage     
                         else:
                             try:
-                                if coverage[-1][-2] == 'w':
+                                if coverage == []:
+                                    new_coverage_list.append([('w', token), ('r', 'default')])
+                                elif coverage[-1][-2] == 'w':
                                     new_coverage_list.append(coverage + [('r', 'default'), ('w', token)])
+                                    #print(new_coverage_list[-1])
                                 else:
                                     new_coverage_list.append(coverage + [('w', token)])
 
                                 try:
-                                    new_state_list = [self.transitions[(self.start_state, cat)]]
+                                    new_state_list.append(self.transitions[(self.start_state, cat)])
                                 except:
-                                    new_state_list = [self.start_state]
+                                    new_state_list.append(self.start_state)
                             except:
                                 continue
 
-                if len(new_coverage_list) > 1024:
-                    return []
-
-                coverage_list, state_list = new_coverage_list, new_state_list
-
+            coverage_list, state_list = new_coverage_list, new_state_list
 
         # finalize coverages
         new_coverage_list = []
@@ -382,12 +407,13 @@ def calculate_coverages(tagged_corpus, rules, cat_dict):
     errors_counter = 0
     pattern_FST = FST(rules)
 
-    for sentence in tagged_corpus:
+    for sentence in tagged_corpus[:-1]:
         coverages = pattern_FST.get_lrlm(sentence, cat_dict)
         current_length = len(coverages)
 
-        for i in coverages:
-            print(i, '\n')
+        print(current_length)
+        print(coverages[0])
+
 
         if current_length != 0:
             cov_lengths.append(current_length)
