@@ -5,7 +5,6 @@ from subprocess import check_output
 from optparse import OptionParser, OptionGroup
 from time import clock
 from streamparser import parse
-from collections import OrderedDict
 
 
 try: # see if lxml is installed
@@ -181,8 +180,6 @@ class FST:
         self.final_states = {} # final state: rule
         self.transitions = {} # (state, input): state
 
-        #print(init_rules)
-
         maxlen = max(len(rule) for rule in init_rules)
         self.maxlen = maxlen - 1
 
@@ -197,9 +194,7 @@ class FST:
                 if len(rule) <= level:
                     # this rule already ended: increment state to keep it simple
                     state += 1
-                    #print(rule)
                 elif len(rule) == level+1:
-                    ##print(rule)
                     # end of the rule is here: add this state as a final
                     self.final_states[rule[level-1][1]] = rule[level]
                 else:
@@ -227,43 +222,24 @@ class FST:
         # each state from state_list is the state of FST
         # at the end of corresponding coverage from coverage_list
         coverage_list, state_list = [[]], [self.start_state]
-        #print(line)
 
-        # go through all tokens in line
         for token, cat_list in line:
-            cat_list = sorted(cat_list)
             new_coverage_list, new_state_list = [], []
 
             if cat_list == []:
-                if coverage_list == [[]]:
-                    coverage_list, state_list = [[('w', token), ('r', 'default')]], [self.start_state]
-                    continue
-                else:
-                    for coverage, state in zip(coverage_list, state_list):
-                        if state in self.final_states:
-                            # current state is one of the final states: close previous pattern
-                            new_coverage = coverage + [('r', self.final_states[state])]
-                            new_coverage_list.append(new_coverage + [('w', token), ('r', 'default')])
-                            new_state_list.append(self.start_state)
-                        else:
-                            try:
-                                if coverage[-1][-2] == 'w':
-                                    new_coverage_list.append(coverage + [('r', 'default'), ('w', token)])
-                                else:
-                                    new_coverage_list.append(coverage + [('w', token)])
+                for coverage, state in zip(coverage_list, state_list):
+                    if state in self.final_states:
+                        new_coverage = coverage + [('r', self.final_states[state])]
+                    else:
+                        new_coverage = coverage + [('r', 'default')] 
 
-                                try:
-                                    new_state_list.append(self.transitions[(self.start_state, cat)])
-                                except:
-                                    new_state_list.append(self.start_state)
-                            except:
-                                continue
+                    new_coverage_list.append(new_coverage + [('w', token), ('r', 'default')])
+                    new_state_list.append(self.start_state)
             else:
                 # go through all cats for the token
                 for cat in cat_list:
                     # try to continue each coverage obtained on the previous step
                     for coverage, state in zip(coverage_list, state_list):
-                        #print(coverage)
                         # first, check if we can go further along current pattern
                         if (state, cat) in self.transitions:
                             # current pattern can be made longer: add one more token
@@ -284,9 +260,8 @@ class FST:
                                 new_coverage_list.append(new_coverage + [('w', token), ('r', 'unknown')])
                                 new_state_list.append(self.start_state)
                             else:
-                                new_coverage_list.append(new_coverage + [('w', token)])
-                                new_state_list.append(self.start_state)
-
+                                new_coverage_list.append(new_coverage + [('w', token), ('r', 'default')])
+                                new_state_list.append(self.start_state)                             
 
                         # if not, check if it is just an unknown word
                         elif state == self.start_state and '*' in token:
@@ -294,26 +269,39 @@ class FST:
                             new_coverage_list.append(coverage + [('w', token), ('r', 'unknown')])
                             new_state_list.append(self.start_state)
 
-
-                        # if nothing worked, just discard this coverage     
                         else:
-                            try:
-                                if coverage == []:
-                                    new_coverage_list.append([('w', token), ('r', 'default')])
-                                elif coverage[-1][-2] == 'w':
-                                    new_coverage_list.append(coverage + [('r', 'default'), ('w', token)])
-                                    #print(new_coverage_list[-1])
-                                else:
-                                    new_coverage_list.append(coverage + [('w', token)])
-
+                            if coverage == [] or coverage[-1][0] == 'r':
+                                new_coverage_list.append(coverage + [('w', token), ('r', 'default')])
+                                new_state_list.append(self.start_state)
+                            else:
                                 try:
-                                    new_state_list.append(self.transitions[(self.start_state, cat)])
+                                    new_state_list.append(self.transitions[(self.start_state, cat)]) 
+                                    new_coverage_list.append(coverage + [('r', 'default'), ('w', token)])
                                 except:
-                                    new_state_list.append(self.start_state)
-                            except:
-                                continue
+                                    new_state_list.append(self.start_state) 
+                                    new_coverage_list.append(coverage + [('r', 'default'), ('w', token), ('r', 'default')])
+           
+            def_coverage_list, def_state_list = [], []
+            cleaned_coverage_list, cleaned_state_list = [], []
+            
+            for coverage, state in zip(new_coverage_list, new_state_list):
+                try:
+                    if coverage[-1][0] == 'r' and coverage[-1][-1] == 'default':
+                        def_coverage_list.append(coverage)
+                        def_state_list.append(state)
+                    elif len(coverage) > 1 and coverage[-2][0] == 'r' and coverage[-2][-1] == 'default':
+                            def_coverage_list.append(coverage)
+                            def_state_list.append(state)
+                    else:
+                        cleaned_coverage_list.append(coverage)
+                        cleaned_state_list.append(state)
+                except:
+                    continue
 
-            coverage_list, state_list = new_coverage_list, new_state_list
+            if len(cleaned_coverage_list) == 0:
+                coverage_list, state_list = def_coverage_list, def_state_list
+            else:
+                coverage_list, state_list = cleaned_coverage_list, cleaned_state_list          
 
         # finalize coverages
         new_coverage_list = []
@@ -342,7 +330,6 @@ class FST:
                     formatted_coverage.append((pattern, element[1]))
                     pattern = []
             formatted_coverage_list.append(formatted_coverage)
-
         return formatted_coverage_list
 
 
@@ -378,22 +365,8 @@ def tag_corpus(corpus, lang_pair):
     for sentence in corpus:
         try:
             command = 'echo "' + sentence + '" | apertium -d . ' + lang_pair + '-pretransfer'
-            tagged_sentence = return_output_from_shell(command)
-
-            """command = 'echo "' + sentence + '" | apertium -d . ' + lang_pair + '-biltrans'
-            sentence = return_output_from_shell(command)
-            sentence = sentence.split('$')[:-1]
-            tagged_sentence = ''
-
-            for elem in sentence:
-                elem = elem.split('/')[0].strip(' ')
-                if elem[1] in '.,!?"\':;()':
-                    tagged_sentence = tagged_sentence.strip(' ') + elem + '$ '
-                else:
-                    tagged_sentence = tagged_sentence + elem + '$ '"""
-            
+            tagged_sentence = return_output_from_shell(command)           
             tagged_corpus.append(tagged_sentence)
-
         except:
             wrong_sentences += 1
 
@@ -412,19 +385,10 @@ def calculate_coverages(tagged_corpus, rules, cat_dict):
         current_length = len(coverages)
 
         print(current_length)
-        print(coverages[0])
-
 
         if current_length != 0:
             cov_lengths.append(current_length)
         else:
-            #print(sentence)
-            if '<ij>' in sentence:
-                ij_errors.append(sentence)
-            elif re.search('<n>.*?-<guio>.*?<n>', sentence) != None:
-                guio_errors.append(sentence)
-            else:
-                other_errors.append(sentence)
             errors_counter += 1
 
 
@@ -432,18 +396,15 @@ def calculate_coverages(tagged_corpus, rules, cat_dict):
     errors_percent = errors_counter * 100 / len(tagged_corpus)
    
     print('Mean number of coverages: %s' % (mean_length))
-    print('Number of ij errors: %s' % (len(ij_errors)))
-    print('Number of guio errors: %s' % (len(guio_errors)))
-    print('Number of other errors: %s' % (len(other_errors)))
     print('Total percentage of errors: %s' % (errors_percent))
 
 
 def main():
     corpus = sys.argv[1]
     lang_pair = sys.argv[2]
+    path_to_lang_pair = sys.argv[3]
     t1x_file = 'apertium-' + lang_pair + '.' + lang_pair + '.t1x'
-
-    path_to_lang_pair = return_output_from_shell('locate apertium-' + lang_pair)
+    
     os.chdir(path_to_lang_pair)
 
     preprocessed_corpus = preprocess_corpus(corpus)
