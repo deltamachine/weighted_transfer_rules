@@ -210,6 +210,62 @@ class FST:
             # to ensure state is changed at the start of next run through
             prev_cat = ''
 
+    def remove_excess_coverages(self, new_coverage_list, new_state_list):
+        def_coverage_list, def_state_list = [], []
+        cleaned_coverage_list, cleaned_state_list = [], []
+        
+        for coverage, state in zip(new_coverage_list, new_state_list):
+            try:
+                if coverage[-1][0] == 'r' and coverage[-1][-1] == 'default':
+                    def_coverage_list.append(coverage)
+                    def_state_list.append(state)
+                elif len(coverage) > 1 and coverage[-2][0] == 'r' and coverage[-2][-1] == 'default':
+                        def_coverage_list.append(coverage)
+                        def_state_list.append(state)
+                else:
+                    cleaned_coverage_list.append(coverage)
+                    cleaned_state_list.append(state)
+            except:
+                continue
+
+        if len(cleaned_coverage_list) == 0:
+            coverage_list, state_list = def_coverage_list, def_state_list
+        else:
+            coverage_list, state_list = cleaned_coverage_list, cleaned_state_list 
+
+        return coverage_list, state_list  
+
+    def finalize_coverages(self, coverage_list, state_list):
+        # finalize coverages
+        new_coverage_list = []
+        
+        for coverage, state in zip(coverage_list, state_list):
+            if state in self.final_states:
+                # current state is one of the final states: close the last pattern
+                new_coverage_list.append(coverage + [('r', self.final_states[state])])
+            elif coverage != [] and coverage[-1][0] == 'r':
+                # the last pattern is already closed
+                new_coverage_list.append(coverage)
+            # if nothing worked, just discard this coverage as incomplete 
+
+        return new_coverage_list
+
+    def format_coverages(self, new_coverage_list):
+        # convert coverage representation:
+        # [('r'/'w', rule_number/token), ...] -> [([token, token, ... ], rule_number), ...]
+        formatted_coverage_list = []
+
+        for coverage in new_coverage_list:
+            pattern, formatted_coverage = [], []
+            for element in coverage:
+                if element[0] == 'w':
+                    pattern.append(element[1])
+                else:
+                    formatted_coverage.append((pattern, element[1]))
+                    pattern = []
+            formatted_coverage_list.append(formatted_coverage)
+
+        return formatted_coverage_list
 
     def get_lrlm(self, line, cat_dict):
         """
@@ -281,55 +337,11 @@ class FST:
                                     new_state_list.append(self.start_state) 
                                     new_coverage_list.append(coverage + [('r', 'default'), ('w', token), ('r', 'default')])
            
-            def_coverage_list, def_state_list = [], []
-            cleaned_coverage_list, cleaned_state_list = [], []
-            
-            for coverage, state in zip(new_coverage_list, new_state_list):
-                try:
-                    if coverage[-1][0] == 'r' and coverage[-1][-1] == 'default':
-                        def_coverage_list.append(coverage)
-                        def_state_list.append(state)
-                    elif len(coverage) > 1 and coverage[-2][0] == 'r' and coverage[-2][-1] == 'default':
-                            def_coverage_list.append(coverage)
-                            def_state_list.append(state)
-                    else:
-                        cleaned_coverage_list.append(coverage)
-                        cleaned_state_list.append(state)
-                except:
-                    continue
+            coverage_list, state_list = self.remove_excess_coverages(new_coverage_list, new_state_list)        
 
-            if len(cleaned_coverage_list) == 0:
-                coverage_list, state_list = def_coverage_list, def_state_list
-            else:
-                coverage_list, state_list = cleaned_coverage_list, cleaned_state_list          
+        new_coverage_list = self.finalize_coverages(coverage_list, state_list)
+        formatted_coverage_list = self.format_coverages(new_coverage_list)
 
-        # finalize coverages
-        new_coverage_list = []
-        for coverage, state in zip(coverage_list, state_list):
-            if state in self.final_states:
-                # current state is one of the final states: close the last pattern
-                new_coverage_list.append(coverage + [('r', self.final_states[state])])
-            elif coverage != [] and coverage[-1][0] == 'r':
-                # the last pattern is already closed
-                new_coverage_list.append(coverage)
-            # if nothing worked, just discard this coverage as incomplete
-
-        if new_coverage_list == []:
-            # no coverages detected: no need to go further
-            return []
-
-        # convert coverage representation:
-        # [('r'/'w', rule_number/token), ...] -> [([token, token, ... ], rule_number), ...]
-        formatted_coverage_list = []
-        for coverage in new_coverage_list:
-            pattern, formatted_coverage = [], []
-            for element in coverage:
-                if element[0] == 'w':
-                    pattern.append(element[1])
-                else:
-                    formatted_coverage.append((pattern, element[1]))
-                    pattern = []
-            formatted_coverage_list.append(formatted_coverage)
         return formatted_coverage_list
 
 
@@ -383,8 +395,6 @@ def calculate_coverages(tagged_corpus, rules, cat_dict):
     for sentence in tagged_corpus[:-1]:
         coverages = pattern_FST.get_lrlm(sentence, cat_dict)
         current_length = len(coverages)
-
-        print(current_length)
 
         if current_length != 0:
             cov_lengths.append(current_length)
