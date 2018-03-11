@@ -1,6 +1,7 @@
 import os
 import re
 import sys
+import random
 from subprocess import check_output
 from optparse import OptionParser, OptionGroup
 from time import clock
@@ -211,6 +212,17 @@ class FST:
             prev_cat = ''
 
     def remove_excess_coverages(self, new_coverage_list, new_state_list):
+        """Зиппится НСП и НСС. Для каждой пары покрытие - состояние происходит следующее:
+            => если покрытие заканчивается на ('r', 'default'):
+                * покрытие и состояние добавляются в дефолтные списки
+            => если длина покрытия > 1 и заканчивается на токен, перед которым было
+            ('r', 'default'):
+                * покрытие и состояние добавляются в дефолтные списки
+            => в остальных случаях:
+                * покрытие и состояние добавляются в чистые списки
+
+            Если в чистом списке есть хотя бы одно покрытие, остается только чистый список.
+            Если нет, то тогда основным списком становится дефолтный."""
         def_coverage_list, def_state_list = [], []
         cleaned_coverage_list, cleaned_state_list = [], []
         
@@ -284,12 +296,13 @@ class FST:
 
             if cat_list == []:
                 for coverage, state in zip(coverage_list, state_list):
-                    if state in self.final_states:
-                        new_coverage = coverage + [('r', self.final_states[state])]
-                    else:
-                        new_coverage = coverage + [('r', 'default')] 
+                    if coverage != [] and coverage[-1][0] != 'r':
+                        if state in self.final_states:
+                            coverage = coverage + [('r', self.final_states[state])]
+                        else:
+                            coverage = coverage + [('r', 'default')] 
 
-                    new_coverage_list.append(new_coverage + [('w', token), ('r', 'default')])
+                    new_coverage_list.append(coverage + [('w', token), ('r', 'default')])
                     new_state_list.append(self.start_state)
             else:
                 # go through all cats for the token
@@ -326,18 +339,20 @@ class FST:
                             new_state_list.append(self.start_state)
 
                         else:
-                            if coverage == [] or coverage[-1][0] == 'r':
-                                new_coverage_list.append(coverage + [('w', token), ('r', 'default')])
-                                new_state_list.append(self.start_state)
-                            else:
-                                try:
-                                    new_state_list.append(self.transitions[(self.start_state, cat)]) 
-                                    new_coverage_list.append(coverage + [('r', 'default'), ('w', token)])
-                                except:
-                                    new_state_list.append(self.start_state) 
-                                    new_coverage_list.append(coverage + [('r', 'default'), ('w', token), ('r', 'default')])
+                            if len(coverage_list) <= 1024: 
+                                if coverage == [] or coverage[-1][0] == 'r':
+                                    new_coverage_list.append(coverage + [('w', token), ('r', 'default')])
+                                    new_state_list.append(self.start_state)
+                                else:
+                                    try:
+                                        new_state_list.append(self.transitions[(self.start_state, cat)]) 
+                                        new_coverage_list.append(coverage + [('r', 'default'), ('w', token)])
+                                    except:
+                                        new_state_list.append(self.start_state) 
+                                        new_coverage_list.append(coverage + [('r', 'default'), ('w', token), ('r', 'default')])
            
-            coverage_list, state_list = self.remove_excess_coverages(new_coverage_list, new_state_list)        
+            coverage_list, state_list = self.remove_excess_coverages(new_coverage_list, new_state_list)
+            #print(coverage_list)        
 
         new_coverage_list = self.finalize_coverages(coverage_list, state_list)
         formatted_coverage_list = self.format_coverages(new_coverage_list)
@@ -367,12 +382,21 @@ def preprocess_corpus(corpus):
     corpus = re.sub('""', '"', corpus)
     corpus = corpus.split('\n')
 
-    return corpus
+    samples = []
+
+    for i in range(100):
+        current_sample = list(map(lambda _: random.choice(corpus), range(100)))
+        samples.append(current_sample)
+
+    return samples
 
 
 def tag_corpus(corpus, lang_pair):
     tagged_corpus = []
     wrong_sentences = 0
+
+    if lang_pair == 'swe-nor':
+        lang_pair = 'swe-nob'
 
     for sentence in corpus:
         try:
@@ -382,13 +406,13 @@ def tag_corpus(corpus, lang_pair):
         except:
             wrong_sentences += 1
 
-    print('Number of incorrect sentences: %s' % (wrong_sentences))
+    #print('Number of incorrect sentences: %s' % (wrong_sentences))
 
     return tagged_corpus
 
 
-def calculate_coverages(tagged_corpus, rules, cat_dict):
-    cov_lengths, ij_errors, guio_errors, other_errors = [], [], [], []
+def calculate_coverages(tagged_corpus, rules, cat_dict, num, lang_pair):
+    cov_lengths = []
     errors_counter = 0
     pattern_FST = FST(rules)
 
@@ -401,26 +425,39 @@ def calculate_coverages(tagged_corpus, rules, cat_dict):
         else:
             errors_counter += 1
 
-
     mean_length = sum(cov_lengths) / len(cov_lengths)
     errors_percent = errors_counter * 100 / len(tagged_corpus)
-   
-    print('Mean number of coverages: %s' % (mean_length))
-    print('Total percentage of errors: %s' % (errors_percent))
 
+    with open('/home/deltamachine/Desktop/' + lang_pair + '-logs.txt', 'a', encoding='utf-8') as file:
+        file.write('Mean number of coverages, sample %s: %s\n' % (num + 1, mean_length))
+        file.write('Total percentage of errors, sample %s: %s\n\n' % (num + 1, errors_percent))
+ 
+    #print('Mean number of coverages, sample %s: %s' % (num + 1, mean_length))
+    #print('Total percentage of errors, sample %s: %s' % (num + 1, errors_percent))
 
 def main():
     corpus = sys.argv[1]
     lang_pair = sys.argv[2]
     path_to_lang_pair = sys.argv[3]
-    t1x_file = 'apertium-' + lang_pair + '.' + lang_pair + '.t1x'
-    
+
     os.chdir(path_to_lang_pair)
 
-    preprocessed_corpus = preprocess_corpus(corpus)
-    tagged_corpus = tag_corpus(preprocessed_corpus, lang_pair)
+    if lang_pair == 'swe-nor':
+        t1x_file = 'apertium-' + lang_pair + '.swe-nob.t1x'
+    else:
+        t1x_file = 'apertium-' + lang_pair + '.' + lang_pair + '.t1x'
+
     cat_dict, rules, ambiguous_rules, rule_id_map, rule_xmls = prepare(t1x_file)
-    calculate_coverages(tagged_corpus, rules, cat_dict)
+    samples = preprocess_corpus(corpus)
+
+    tagged_samples = []
+
+    for sample in samples:
+        tagged_sample = tag_corpus(sample, lang_pair)
+        tagged_samples.append(tagged_sample)
+
+    for i in range(len(tagged_samples)):
+        calculate_coverages(tagged_samples[i], rules, cat_dict, i, lang_pair)
 
 
 if __name__ == '__main__':
